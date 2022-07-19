@@ -21,6 +21,7 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -34,11 +35,13 @@ import (
 )
 
 const (
-	ksvcUrl         = "sleeptalker.default.example.com"
-	deployNamespace = "default"
-	workerNodeName  = "kind-worker"
-	lbsvcNamespace  = "kourier-system"
-	lbsvcName       = "kourier"
+	ksvcUrl           = "sleeptalker.default.example.com"
+	deployNamespace   = "default"
+	workerNodeName    = "kind-worker"
+	lbsvcNamespace    = "kourier-system"
+	lbsvcName         = "kourier"
+	crioRuntime       = "crio"
+	containerdRuntime = "containerd"
 )
 
 func newClient() (*test.Clients, error) {
@@ -116,10 +119,15 @@ func isPausedState(ctx context.Context, clients *test.Clients) error {
 	return nil
 }
 
-func requestService(ctx context.Context, clients *test.Clients) error {
+func getRequestIP(ctx context.Context, clients *test.Clients) (string, error) {
+	runtimeType := os.Getenv("RUNTIME_TYPE")
+	if runtimeType == crioRuntime {
+		return "127.0.0.1", nil
+	}
+
 	node, err := clients.KubeClient.CoreV1().Nodes().Get(ctx, workerNodeName, metav1.GetOptions{})
 	if err != nil {
-		return fmt.Errorf("get worker node error:%v", err)
+		return "", fmt.Errorf("get worker node error:%v", err)
 	}
 
 	nodeIP := ""
@@ -129,7 +137,15 @@ func requestService(ctx context.Context, clients *test.Clients) error {
 		}
 	}
 	if nodeIP == "" {
-		return fmt.Errorf("node ip is empty")
+		return "", fmt.Errorf("node ip is empty")
+	}
+	return nodeIP, nil
+}
+
+func requestService(ctx context.Context, clients *test.Clients) error {
+	requestIP, err := getRequestIP(ctx, clients)
+	if err != nil {
+		return fmt.Errorf("get request ip error")
 	}
 
 	var nodePort int32
@@ -147,7 +163,7 @@ func requestService(ctx context.Context, clients *test.Clients) error {
 		return fmt.Errorf("lb's nodePort is 0")
 	}
 
-	reqUrl := "http://" + nodeIP + ":" + strconv.Itoa(int(nodePort))
+	reqUrl := "http://" + requestIP + ":" + strconv.Itoa(int(nodePort))
 	req, err := http.NewRequest("GET", reqUrl, nil)
 	if err != nil {
 		return fmt.Errorf("create http request error:%v", err)
